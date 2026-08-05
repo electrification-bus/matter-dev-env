@@ -189,6 +189,12 @@ There is no code path that runs `git reset --hard`, `git checkout --force`, or `
 | `CLAUDE.md` | Shared project context for AI coding agents. Personal agent config goes in the gitignored `CLAUDE.local.md`. |
 | `CONTRIBUTING.md` | How to get involved; Discussions versus Issues; how to add a preflight check. |
 
+## Related
+
+[**matter-test-lab**](https://github.com/electrification-bus/matter-test-lab) is the companion repo: Ansible for a Raspberry-Pi-based Matter certification lab. It installs the [Matter Test Harness](https://github.com/project-chip/certification-tool) and runs real certification test cases against a device, either one you are building or a reference DUT it can build for you. No CSA membership is needed for that either; the Test Harness and its test content are public.
+
+The split is roughly: use **matter-dev-env** to build and iterate on the SDK on your own machine, and **matter-test-lab** when you want to point a real Test Harness at a real device. They share conventions but are deliberately independent, since the lab needs hardware and most developers do not.
+
 ## Status and contributing
 
 Working and in daily use on macOS (Apple Silicon). The Debian/Ubuntu package paths follow the SDK's own documented list and the same logic proven on Raspberry Pi test-event hosts, but have had less mileage than the macOS path; reports welcome.

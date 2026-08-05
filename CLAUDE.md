@@ -81,6 +81,10 @@ There is no CI suite; the honest unit of test is a real machine. Test what you t
 
 The repo supports non-CSA-members (public repos only, no credentials, the default) and CSA participating members (adds the members-only spec and test-plan repos via SSH). Changes must not assume the reader has private access, and must not make the public-only path require credentials. See the README section for the split.
 
+## Related
+
+`matter-test-lab` (same org) is the companion: Ansible for a Raspberry-Pi Matter certification lab, installing the Test Harness and running real certification tests against a device. Shared conventions, different audience and different hardware assumptions. Cross-repo changes should keep the conventions aligned but the repos independent; deliberately duplicating a small task file is preferred over introducing cross-repo role sharing.
+
 ## Layout
 
 | Path | Role |
