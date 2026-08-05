@@ -1,0 +1,40 @@
+---
+# Build one example app.
+#
+# Note on paths: example apps live under examples/<app>/linux even when you are
+# building on macOS. That directory name means "the host/POSIX variant" rather
+# than "Linux only"; it compiles natively on macOS to an arm64 binary.
+
+- name: Build {{ matter_example_path }}
+  ansible.builtin.shell:
+    cmd: >-
+      source scripts/activate.sh &&
+      ./scripts/examples/gn_build_example.sh
+      {{ matter_example_path }} {{ matter_example_out }}
+    chdir: "{{ matter_sdk_dir }}"
+    creates: "{{ matter_sdk_dir }}/{{ matter_example_out }}/{{ matter_example_binary }}"
+  args:
+    executable: /bin/bash
+  async: 7200
+  poll: 30
+
+- name: Confirm the example binary exists
+  ansible.builtin.stat:
+    path: "{{ matter_sdk_dir }}/{{ matter_example_out }}/{{ matter_example_binary }}"
+  register: build_example_bin
+
+- name: Fail if the example binary is missing
+  ansible.builtin.assert:
+    that: build_example_bin.stat.exists
+    fail_msg: >-
+      Build reported success but {{ matter_example_binary }} is not at
+      {{ matter_example_out }}. Check that matter_example_binary matches the
+      binary this app actually produces.
+    quiet: true
+
+- name: Report the example build
+  ansible.builtin.debug:
+    msg: >-
+      Built {{ matter_example_binary }}
+      ({{ (build_example_bin.stat.size / 1048576) | round(1) }} MB) at
+      {{ matter_sdk_dir }}/{{ matter_example_out }}/

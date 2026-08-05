@@ -1,0 +1,48 @@
+---
+# matter-dev-env: stand up a Matter SDK development environment.
+#
+#   ansible-playbook setup.yml                      # the whole thing
+#   ansible-playbook setup.yml --tags preflight     # just check this machine
+#   ansible-playbook setup.yml --tags repos         # just clone/update repos
+#   ansible-playbook setup.yml --tags build         # also build and smoke-test
+#   ansible-playbook setup.yml --check              # dry run
+#
+# Targets localhost by default. To provision another machine, add it to
+# inventory.ini and use -l <host>; nothing else changes.
+
+- name: Provision a Matter SDK development environment
+  hosts: matter_dev
+  gather_facts: true
+
+  roles:
+    # Catch problems that would otherwise surface 40 minutes into a build.
+    - role: preflight
+      tags: [preflight]
+
+    # OS packages. Skipped entirely when matter_install_packages is false.
+    - role: platform_deps
+      tags: [deps]
+      when: matter_install_packages | bool
+
+    # Clone and fast-forward the configured repos. Never discards local work.
+    - role: repos
+      tags: [repos]
+
+    # SDK submodules, pigweed bootstrap, alchemy, ZAP.
+    - role: toolchain
+      tags: [toolchain]
+
+    # Optional: build an example app, the Python controller, and smoke-test.
+    - role: build
+      tags: [build]
+
+  post_tasks:
+    - name: Summarise
+      ansible.builtin.debug:
+        msg:
+          - "Matter development environment ready under {{ matter_root }}."
+          - "Repositories: {{ repos_report | default([]) | join(' | ') }}"
+          - "Activate the SDK environment:  cd {{ matter_sdk_dir }} && source scripts/activate.sh"
+          - >-
+            {{ 'Ensure ' ~ matter_bin_dir ~ ' is on your PATH for the installed tools.'
+               if matter_bin_dir | length > 0 else 'No bin directory configured.' }}

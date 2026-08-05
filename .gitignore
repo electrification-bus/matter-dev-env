@@ -1,0 +1,22 @@
+# Personal configuration lives in host_vars/ and is never committed.
+# The whole directory is ignored (rather than a pattern plus a negation for the
+# template) so there is no way to accidentally commit a personal file, and no
+# negation-pattern subtlety to get wrong later.
+#
+# The template ships at examples/host_vars/localhost.yml. Copy it:
+#   mkdir -p host_vars && cp examples/host_vars/localhost.yml host_vars/
+/host_vars/
+
+# Personal AI-agent context stays local; CLAUDE.md (shared, project facts) is
+# tracked. Put your own preferences in CLAUDE.local.md instead of editing it.
+CLAUDE.local.md
+AGENTS.local.md
+
+# Some developers globally gitignore CLAUDE.md / AGENTS.md (a common convention
+# for keeping AI context out of published repos). Here they are intentionally
+# shared, so override any such global rule.
+!CLAUDE.md
+!AGENTS.md
+
+*.retry
+.DS_Store

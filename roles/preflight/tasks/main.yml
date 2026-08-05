@@ -1,0 +1,227 @@
+---
+# Preflight: catch the things that otherwise fail halfway through a long build.
+#
+# Every check appends a human-readable string to preflight_problems rather than
+# failing immediately, so one run tells you everything that is wrong instead of
+# making you discover the problems one reboot at a time. The list is asserted at
+# the end (or merely reported, if matter_preflight_strict is false).
+
+- name: Start with no recorded problems
+  ansible.builtin.set_fact:
+    preflight_problems: []
+
+# --- Platform ---------------------------------------------------------------
+
+- name: Record unsupported operating system
+  ansible.builtin.set_fact:
+    preflight_problems: >-
+      {{ preflight_problems + [
+        'Unsupported OS: ' ~ ansible_system ~ ' (' ~ ansible_distribution | default('unknown') ~ ').
+         This role supports macOS and Debian-family Linux.'
+      ] }}
+  when:
+    - ansible_system != 'Darwin'
+    - ansible_os_family != 'Debian'
+
+# --- Disk space -------------------------------------------------------------
+#
+# A full checkout with submodules plus one example app build runs into tens of
+# GB. Running out at minute 40 of a build is the single most expensive way to
+# discover this.
+
+- name: Find the deepest existing ancestor of matter_root
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      p='{{ matter_root }}'
+      while [ ! -d "$p" ] && [ "$p" != "/" ]; do p=$(dirname "$p"); done
+      printf '%s' "$p"
+  args:
+    executable: /bin/bash
+  register: preflight_ancestor
+  changed_when: false
+
+- name: Measure free space available to matter_root
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      df -Pk {{ preflight_ancestor.stdout | quote }} | awk 'NR==2 {print int($4/1048576)}'
+  args:
+    executable: /bin/bash
+  register: preflight_free_gb
+  changed_when: false
+
+- name: Record insufficient disk space
+  ansible.builtin.set_fact:
+    preflight_problems: >-
+      {{ preflight_problems + [
+        'Only ' ~ preflight_free_gb.stdout ~ ' GB free on ' ~ preflight_ancestor.stdout ~
+        ', need ' ~ matter_min_free_gb ~ ' GB (matter_min_free_gb). A full SDK checkout
+         plus one example app build runs into tens of GB.'
+      ] }}
+  when: preflight_free_gb.stdout | int < matter_min_free_gb | int
+
+# --- Core tools -------------------------------------------------------------
+
+- name: Look for git # noqa: command-instead-of-module
+  ansible.builtin.command: git --version
+  register: preflight_git
+  changed_when: false
+  failed_when: false
+
+- name: Record missing git
+  ansible.builtin.set_fact:
+    preflight_problems: "{{ preflight_problems + ['git not found on PATH.'] }}"
+  when: preflight_git.rc != 0
+
+# Probe the python3 that a NORMAL shell on this machine would use, not the one
+# that happens to be active right now. It is very common to run Ansible from a
+# virtualenv, and that venv's python shadows the system one on PATH. Reporting
+# the venv's version here produces a confusing false failure: the SDK is not
+# going to be built from your Ansible venv.
+- name: Determine the host Python version, ignoring any active virtualenv
+  ansible.builtin.shell:
+    cmd: |
+      set -uo pipefail
+      probe_path="$PATH"
+      if [ -n "${VIRTUAL_ENV:-}" ]; then
+        probe_path=$(printf '%s' "$PATH" | tr ':' '\n' \
+                     | grep -vxF "$VIRTUAL_ENV/bin" | paste -sd: -)
+      fi
+      if PATH="$probe_path" command -v python3 >/dev/null 2>&1; then
+        PATH="$probe_path" python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])'
+      else
+        echo none
+      fi
+  args:
+    executable: /bin/bash
+  register: preflight_python
+  changed_when: false
+
+- name: Record missing or too-old Python
+  ansible.builtin.set_fact:
+    preflight_problems: >-
+      {{ preflight_problems + [
+        'Python ' ~ preflight_python.stdout ~ ' found on PATH, need >= ' ~ matter_min_python ~
+        ' (matter_min_python). The SDK requires 3.11+; see docs/guides/BUILDING.md,
+         which documents upgrading on Ubuntu 22.04.'
+      ] }}
+  when: >-
+    preflight_python.stdout == 'none' or
+    preflight_python.stdout is version(matter_min_python, '<')
+
+# --- macOS specifics --------------------------------------------------------
+
+- name: Check for the Xcode command line tools
+  ansible.builtin.command: xcode-select -p
+  register: preflight_xcode
+  changed_when: false
+  failed_when: false
+  when: ansible_system == 'Darwin'
+
+- name: Record missing Xcode command line tools
+  ansible.builtin.set_fact:
+    preflight_problems: >-
+      {{ preflight_problems + [
+        'Xcode command line tools not installed. Run: xcode-select --install'
+      ] }}
+  when:
+    - ansible_system == 'Darwin'
+    - preflight_xcode.rc != 0
+
+- name: Ensure the local bin directory exists
+  ansible.builtin.file:
+    path: "{{ matter_bin_dir }}"
+    state: directory
+    mode: "0755"
+  when: matter_bin_dir | length > 0
+
+# Installed as a standalone command as well, so you can re-run the diagnosis at
+# any time (and hand it to a colleague) without running the playbook.
+- name: Install the macOS keychain certificate checker
+  ansible.builtin.copy:
+    src: check-macos-keychain-certs.sh
+    dest: "{{ matter_bin_dir }}/matter-check-keychain-certs"
+    mode: "0755"
+  when:
+    - ansible_system == 'Darwin'
+    - matter_bin_dir | length > 0
+
+# The reason this whole role exists. See the script's header comment for the
+# full explanation of why one bad certificate breaks the entire SDK bootstrap.
+- name: Check the keychain for certificates OpenSSL cannot parse
+  ansible.builtin.script: check-macos-keychain-certs.sh
+  register: preflight_keychain
+  changed_when: false
+  failed_when: false
+  when: ansible_system == 'Darwin'
+
+- name: Record unparseable keychain certificates
+  ansible.builtin.set_fact:
+    preflight_problems: >-
+      {{ preflight_problems + [
+        'Unparseable certificate(s) in your macOS keychain will break the SDK
+         bootstrap with "ssl.SSLError: [PEM] ASN1 lib". Details and the exact
+         removal command:\n' ~ preflight_keychain.stdout | trim
+      ] }}
+  when:
+    - ansible_system == 'Darwin'
+    - preflight_keychain.rc | default(0) != 0
+
+# --- Access to the CSA private repositories ---------------------------------
+
+- name: Note which private repositories are enabled
+  ansible.builtin.set_fact:
+    preflight_private_repos: >-
+      {{ matter_repos_effective
+         | selectattr('private', 'defined') | selectattr('private') | list }}
+
+- name: Test SSH access to github.com
+  ansible.builtin.command: ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -T git@github.com
+  register: preflight_gh_ssh
+  changed_when: false
+  failed_when: false
+  when: preflight_private_repos | length > 0
+
+# GitHub always exits 1 on `ssh -T` even when auth succeeds; the greeting in
+# stderr is the real signal.
+- name: Record missing GitHub SSH access for private repositories
+  ansible.builtin.set_fact:
+    preflight_problems: >-
+      {{ preflight_problems + [
+        'These CSA members-only repos are requested but `ssh -T git@github.com`
+         did not authenticate: ' ~
+        (preflight_private_repos | map(attribute='name') | join(', ')) ~
+        '. They need BOTH CSA participating membership and your SSH key
+         registered with GitHub. If you are not a CSA member, set
+         matter_csa_member: false (the default): everything needed to build the
+         SDK and develop Matter products is public and needs no credentials.'
+      ] }}
+  when:
+    - preflight_private_repos | length > 0
+    - "'successfully authenticated' not in (preflight_gh_ssh.stderr | default(''))"
+
+# --- Verdict ----------------------------------------------------------------
+
+- name: Report preflight problems
+  ansible.builtin.debug:
+    msg: "{{ preflight_problems }}"
+  when: preflight_problems | length > 0
+
+- name: Fail if preflight found problems
+  ansible.builtin.assert:
+    that: preflight_problems | length == 0
+    fail_msg: |-
+      Preflight found {{ preflight_problems | length }} problem(s), listed above.
+      Fix them, or re-run with -e matter_preflight_strict=false to continue anyway.
+    success_msg: "Preflight passed."
+    quiet: true
+  when: matter_preflight_strict | bool
+
+- name: Report that preflight passed
+  ansible.builtin.debug:
+    msg: >-
+      Preflight passed: {{ ansible_system }} {{ ansible_architecture }},
+      Python {{ preflight_python.stdout }}, {{ preflight_free_gb.stdout }} GB free
+      on {{ preflight_ancestor.stdout }}.
+  when: preflight_problems | length == 0

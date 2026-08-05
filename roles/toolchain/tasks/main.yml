@@ -1,0 +1,14 @@
+---
+# SDK submodules, the pigweed environment, and the standalone tools.
+
+- name: Check out SDK submodules and bootstrap pigweed
+  ansible.builtin.include_tasks: sdk.yml
+  when: matter_sdk_enabled | bool
+
+- name: Install alchemy
+  ansible.builtin.include_tasks: alchemy.yml
+  when: matter_install_alchemy | bool
+
+- name: Install the ZAP release
+  ansible.builtin.include_tasks: zap.yml
+  when: matter_install_zap_release | bool

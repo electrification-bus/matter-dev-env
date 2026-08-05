@@ -1,0 +1,74 @@
+---
+# TEMPLATE. This file is not read by Ansible from here. Copy it into place:
+#
+#   mkdir -p host_vars
+#   cp examples/host_vars/localhost.yml host_vars/localhost.yml
+#
+# then edit host_vars/localhost.yml. That path is gitignored, so your personal
+# paths and choices are never committed and `git pull` never conflicts with them.
+#
+# Ansible loads host_vars/<inventory_hostname>.yml automatically and it takes
+# precedence over group_vars/all.yml. For a host other than this machine, name
+# the file after the inventory host, e.g. host_vars/devbox.local.yml.
+#
+# Put ONLY the values that differ from group_vars/all.yml here. Everything you
+# leave out keeps tracking upstream defaults, which is the point.
+#
+# Every variable in group_vars/all.yml can be overridden. The common ones:
+
+# --- Where repositories live -------------------------------------------------
+# Default is ~/matter. Point this at an existing tree to adopt clones you
+# already have: the repos role fast-forwards them and never discards work.
+# matter_root: "{{ ansible_env.HOME }}/src/matter"
+
+# --- Are you a CSA member? ---------------------------------------------------
+# Leave this out (default false) if you are building Matter products or
+# integrations against the public SDK. Everything you need is public and no
+# GitHub credentials are required.
+#
+# Set it to true only if you are a CSA participating member doing development
+# on the standard itself (specification text, new clusters or device types,
+# certification test plans). It additionally clones the members-only repos,
+# which need both CSA membership and your SSH key on github.com. Preflight
+# checks that access before anything is cloned.
+# matter_csa_member: true
+
+# --- Which repositories to manage --------------------------------------------
+# You do NOT need to copy the whole matter_repos list to turn one repo on or
+# off. Use these instead; they are merged against the defaults by name.
+# matter_repos_enable:
+#   - connectedhomeip-doc
+#   - zap
+#   - connectedhomeip-doc
+
+# Skip something enabled by default:
+# matter_repos_disable:
+#   - alchemy
+
+# Add repositories of your own, same shape as the entries in group_vars/all.yml:
+# matter_repos_extra:
+#   - name: my-matter-fork
+#     url: git@github.com:me/connectedhomeip.git
+#     version: my-feature-branch
+#     enabled: true
+
+# --- Build behaviour ---------------------------------------------------------
+# Build and smoke-test on every run rather than only with --tags build.
+# matter_build_example: true
+# matter_build_python_controller: true
+# matter_smoke_test: true
+
+# Build a different example app than all-clusters-app. Note that the binary
+# name must match what the app actually produces.
+# matter_example_path: examples/lighting-app/linux
+# matter_example_binary: chip-lighting-app
+
+# Check out submodules for more than one platform, if you cross-build.
+# matter_submodule_platforms: [linux, esp32]
+
+# --- Preflight ---------------------------------------------------------------
+# Lower the free-space requirement if you know what you are doing.
+# matter_min_free_gb: 25
+
+# Report preflight problems but continue anyway.
+# matter_preflight_strict: false

@@ -1,0 +1,87 @@
+---
+# Smoke test: commission the freshly-built example app with the freshly-built
+# controller and run one real certification test against it.
+#
+# This is the difference between "the tools installed" and "the environment
+# actually works". It exercises the compiler, the pigweed environment, the
+# Python controller, mDNS/DNS-SD discovery, and commissioning in one shot.
+
+# --- Two traps that cost real debugging time, handled up front ---------------
+
+# run_python_test.py --factory-reset globs /tmp/chip* and unlink()s every match.
+# A leftover chip* DIRECTORY there (easy to create by hand) makes it die with
+# "IsADirectoryError: [Errno 21] Is a directory" long before any test runs.
+- name: Clear stale /tmp/chip* directories that would break --factory-reset
+  ansible.builtin.shell:
+    cmd: |
+      set -u
+      for p in /tmp/chip*; do
+        [ -d "$p" ] && rm -rf "$p" && echo "removed stale directory $p"
+      done
+      exit 0
+  args:
+    executable: /bin/bash
+  register: build_stale_chip
+  changed_when: build_stale_chip.stdout | length > 0
+
+# Use pkill -x (match the process NAME) and never pkill -f (match the whole
+# command line). With -f, a pattern naming the app also matches this very task's
+# own command line, so the cleanup kills itself.
+- name: Stop any leftover instance of the example app
+  ansible.builtin.command:
+    cmd: "pkill -x {{ matter_example_binary }}"
+  register: build_pkill
+  changed_when: build_pkill.rc == 0
+  failed_when: false
+
+# --- Run it -----------------------------------------------------------------
+
+- name: Run the certification smoke test against {{ matter_example_binary }}
+  ansible.builtin.shell:
+    cmd: >-
+      source scripts/activate.sh &&
+      source {{ matter_python_env }}/bin/activate &&
+      scripts/tests/run_python_test.py
+      --factory-reset
+      --app "{{ matter_sdk_dir }}/{{ matter_example_out }}/{{ matter_example_binary }}"
+      --app-args "--discriminator {{ matter_smoke_discriminator }} --KVS kvs1"
+      --script "{{ matter_sdk_dir }}/{{ matter_smoke_test_script }}"
+      --script-args "--storage-path admin_storage.json
+                     --manual-code {{ matter_smoke_manual_code }}
+                     --PICS {{ matter_smoke_pics }}"
+    chdir: "{{ matter_sdk_dir }}"
+  args:
+    executable: /bin/bash
+  register: build_smoke
+  changed_when: false
+  failed_when: false
+  async: 1800
+  poll: 15
+
+- name: Extract the test summary
+  ansible.builtin.set_fact:
+    build_smoke_summary: >-
+      {{ (build_smoke.stdout | regex_search('Test results: (.*)', '\\1') | first)
+         | default('(no summary line found)', true) }}
+
+- name: Report the smoke test
+  ansible.builtin.debug:
+    msg: >-
+      Smoke test {{ 'PASSED' if build_smoke.rc == 0 else 'FAILED' }}
+      ({{ matter_smoke_test_script | basename }}): {{ build_smoke_summary }}
+
+- name: Show the tail of the log when the smoke test failed
+  ansible.builtin.debug:
+    msg: "{{ build_smoke.stdout_lines[-40:] | default([]) }}"
+  when: build_smoke.rc != 0
+
+- name: Fail if the smoke test did not pass
+  ansible.builtin.assert:
+    that: build_smoke.rc == 0
+    fail_msg: >-
+      The environment builds but the smoke test failed, so something is wrong
+      beyond compilation. The last 40 log lines are above. A discriminator
+      greater than 4095 is a classic cause: it is a 12-bit field, and an
+      out-of-range value aborts both the app and the controller during
+      commissioning with a confusing SIGABRT.
+    quiet: true

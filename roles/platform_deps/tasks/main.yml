@@ -1,0 +1,14 @@
+---
+# Operating-system packages the SDK needs, per platform.
+#
+# The package lists here are taken from the SDK's own docs/guides/BUILDING.md
+# ("Installing prerequisites"), not invented. When upstream changes its list,
+# change it here and cite the same source.
+
+- name: Install Debian/Ubuntu build prerequisites
+  ansible.builtin.include_tasks: debian.yml
+  when: ansible_os_family == 'Debian'
+
+- name: Check macOS build prerequisites
+  ansible.builtin.include_tasks: macos.yml
+  when: ansible_system == 'Darwin'

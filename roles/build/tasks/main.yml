@@ -1,0 +1,18 @@
+---
+# Optional: actually build something, and prove the environment works.
+#
+# All three steps are off by default (see group_vars/all.yml) so a plain run is
+# fast. Running with `--tags build` sets matter_build_requested, which turns all
+# three on for that run without editing any flags.
+
+- name: Build an example app
+  ansible.builtin.include_tasks: example.yml
+  when: matter_build_example | bool or matter_build_requested | bool
+
+- name: Build the Python controller
+  ansible.builtin.include_tasks: python_controller.yml
+  when: matter_build_python_controller | bool or matter_build_requested | bool
+
+- name: Run the smoke test
+  ansible.builtin.include_tasks: smoke_test.yml
+  when: matter_smoke_test | bool or matter_build_requested | bool

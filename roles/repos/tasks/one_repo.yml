@@ -1,0 +1,113 @@
+---
+# Clone or fast-forward a single repository. See main.yml for the safety
+# contract. Invoked with loop_var: repo.
+
+- name: Look for an existing clone of {{ repo.name }}
+  ansible.builtin.stat:
+    path: "{{ matter_root }}/{{ repo.name }}/.git"
+  register: repos_git
+
+# --- Absent: clone it -------------------------------------------------------
+
+- name: Clone {{ repo.name }}
+  ansible.builtin.git:
+    repo: "{{ repo.url }}"
+    dest: "{{ matter_root }}/{{ repo.name }}"
+    version: "{{ repo.version }}"
+    # Submodules are handled by the SDK's own checkout_submodules.py, which
+    # fetches only the platforms you asked for instead of all ~78 of them.
+    recursive: false
+    # Belt and braces: this task only runs when the directory is absent, but if
+    # that ever changes we still must not clobber anything.
+    force: false
+  when: not repos_git.stat.exists
+
+- name: Record the clone of {{ repo.name }}
+  ansible.builtin.set_fact:
+    repos_report: >-
+      {{ repos_report + [repo.name ~ ': CLONED at ' ~ repo.version] }}
+  when: not repos_git.stat.exists
+
+# --- Present: fetch, then fast-forward only if it is safe -------------------
+
+- name: Maintain the existing clone of {{ repo.name }}
+  when:
+    - repos_git.stat.exists
+    - matter_repos_update != 'none'
+  block:
+
+    # Deliberately the git command rather than ansible.builtin.git: the module
+    # cannot express "fetch, then fast-forward ONLY if the tree is clean and the
+    # branch has not diverged". Its update/force options would move or discard
+    # the working tree, which is exactly what this role promises never to do.
+    - name: Fetch {{ repo.name }} # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: git fetch --all --prune --tags
+        chdir: "{{ matter_root }}/{{ repo.name }}"
+      changed_when: false
+
+    - name: Inspect working tree and branch state of {{ repo.name }}
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          printf 'dirty=%s\n' "$(git status --porcelain | head -1 | wc -l | tr -d ' ')"
+          printf 'branch=%s\n' "$(git rev-parse --abbrev-ref HEAD)"
+          if git rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+            printf 'upstream=%s\n' "$(git rev-parse --abbrev-ref '@{u}')"
+            printf 'behind=%s\n' "$(git rev-list --count 'HEAD..@{u}')"
+            printf 'ahead=%s\n'  "$(git rev-list --count '@{u}..HEAD')"
+          else
+            printf 'upstream=\nbehind=0\nahead=0\n'
+          fi
+        chdir: "{{ matter_root }}/{{ repo.name }}"
+      args:
+        executable: /bin/bash
+      register: repos_state
+      changed_when: false
+
+    - name: Parse the state of {{ repo.name }}
+      ansible.builtin.set_fact:
+        repos_facts: >-
+          {{ dict(repos_state.stdout_lines | map('split', '=') | map('map', 'trim')) }}
+
+    - name: Fast-forward {{ repo.name }} # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: git merge --ff-only "@{u}"
+        chdir: "{{ matter_root }}/{{ repo.name }}"
+      when:
+        - matter_repos_update == 'ff-only'
+        - repos_facts.dirty | int == 0
+        - repos_facts.upstream | length > 0
+        - repos_facts.behind | int > 0
+        - repos_facts.ahead | int == 0
+      changed_when: true
+
+    - name: Record the outcome for {{ repo.name }}
+      ansible.builtin.set_fact:
+        repos_report: "{{ repos_report + [repo.name ~ ': ' ~ repos_outcome] }}"
+      vars:
+        repos_outcome: >-
+          {%- if repos_facts.dirty | int != 0 -%}
+            SKIPPED (local changes) on {{ repos_facts.branch }}, fetched only. Nothing discarded.
+          {%- elif repos_facts.upstream | length == 0 -%}
+            SKIPPED (no upstream) on {{ repos_facts.branch }}, fetched only.
+          {%- elif repos_facts.ahead | int > 0 and repos_facts.behind | int > 0 -%}
+            SKIPPED (diverged: {{ repos_facts.ahead }} ahead, {{ repos_facts.behind }} behind)
+            on {{ repos_facts.branch }}, fetched only. Rebase or merge by hand.
+          {%- elif repos_facts.ahead | int > 0 -%}
+            ahead {{ repos_facts.ahead }} on {{ repos_facts.branch }}, nothing to pull.
+          {%- elif repos_facts.behind | int > 0 and matter_repos_update == 'ff-only' -%}
+            fast-forwarded {{ repos_facts.behind }} commit(s) on {{ repos_facts.branch }}.
+          {%- elif repos_facts.behind | int > 0 -%}
+            {{ repos_facts.behind }} commit(s) behind on {{ repos_facts.branch }}, fetch-only mode.
+          {%- else -%}
+            up to date on {{ repos_facts.branch }}.
+          {%- endif -%}
+
+- name: Record that updates are disabled for {{ repo.name }}
+  ansible.builtin.set_fact:
+    repos_report: >-
+      {{ repos_report + [repo.name ~ ': present, updates disabled (matter_repos_update=none)'] }}
+  when:
+    - repos_git.stat.exists
+    - matter_repos_update == 'none'

@@ -1,0 +1,49 @@
+---
+# macOS prerequisites.
+#
+# Deliberately almost empty, and that is correct: the SDK's own
+# docs/guides/BUILDING.md asks only for Xcode on macOS. Everything else the
+# build needs (clang, gn, ninja, a Python interpreter) is supplied by pigweed's
+# CIPD toolchain during bootstrap, and mDNS is built in via Bonjour, so there is
+# no Avahi equivalent to install.
+#
+# Resist the urge to `brew install` a compiler or OpenSSL here. The build uses
+# the pigweed toolchain, and a Homebrew OpenSSL on PATH is a common source of
+# confusing mismatches rather than a fix.
+
+- name: Verify the Xcode command line tools are present
+  ansible.builtin.command: xcode-select -p
+  register: platform_deps_xcode
+  changed_when: false
+  failed_when: false
+
+- name: Fail with instructions if the Xcode command line tools are missing
+  ansible.builtin.assert:
+    that: platform_deps_xcode.rc == 0
+    fail_msg: >-
+      Xcode command line tools are required to build the SDK on macOS.
+      Install them with: xcode-select --install
+    success_msg: "Xcode command line tools present at {{ platform_deps_xcode.stdout | trim }}."
+    quiet: true
+
+# Not required by the SDK, but the toolchain role uses it to install Go (for
+# building alchemy from source) and Node (for the ZAP GUI) when those are
+# requested. Recorded here so the toolchain role can decide without re-probing.
+- name: Detect Homebrew
+  ansible.builtin.command: brew --prefix
+  register: platform_deps_brew
+  changed_when: false
+  failed_when: false
+
+- name: Record whether Homebrew is available
+  ansible.builtin.set_fact:
+    platform_deps_brew_available: "{{ platform_deps_brew.rc == 0 }}"
+    platform_deps_brew_prefix: "{{ platform_deps_brew.stdout | trim if platform_deps_brew.rc == 0 else '' }}"
+
+- name: Note that Homebrew is absent
+  ansible.builtin.debug:
+    msg: >-
+      Homebrew not found. That is fine for building the SDK, but installing
+      alchemy from source (needs Go) or the ZAP GUI (needs Node) will be skipped
+      unless you install those yourself. See https://brew.sh.
+  when: not platform_deps_brew_available

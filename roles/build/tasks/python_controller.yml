@@ -1,0 +1,33 @@
+---
+# Build the Python controller: the matter package plus the test harness that
+# src/python_testing/TC_*.py scripts run against. Required for any TC_* run.
+
+- name: Build the Python controller into {{ matter_python_env }}
+  ansible.builtin.shell:
+    cmd: >-
+      source scripts/activate.sh &&
+      ./scripts/build_python.sh -i {{ matter_python_env }}
+    chdir: "{{ matter_sdk_dir }}"
+    creates: "{{ matter_sdk_dir }}/{{ matter_python_env }}/bin/activate"
+  args:
+    executable: /bin/bash
+  async: 7200
+  poll: 30
+
+- name: Verify the controller imports
+  ansible.builtin.shell:
+    cmd: >-
+      source {{ matter_python_env }}/bin/activate &&
+      python -c 'import matter.clusters as c; print(c.__name__)'
+    chdir: "{{ matter_sdk_dir }}"
+  args:
+    executable: /bin/bash
+  register: build_controller_import
+  changed_when: false
+
+- name: Report the Python controller
+  ansible.builtin.debug:
+    msg: >-
+      Python controller ready at {{ matter_sdk_dir }}/{{ matter_python_env }}
+      (imported {{ build_controller_import.stdout | trim }}). Activate it with:
+      source {{ matter_sdk_dir }}/{{ matter_python_env }}/bin/activate

@@ -1,0 +1,274 @@
+---
+# =============================================================================
+# matter-dev-env: ALL user configuration lives in this file.
+#
+# Nothing here is required reading to get started: the defaults stand up a
+# working Matter SDK development environment as-is. Change what you care about.
+#
+# To override without editing this file (recommended, so you stay merge-clean
+# with upstream), put your values in host_vars/<host>.yml. For a local install
+# that is host_vars/localhost.yml. See host_vars/localhost.yml.example.
+# Anything can also be overridden per-run with -e, e.g.
+#   ansible-playbook setup.yml -e matter_root=/opt/matter
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Where everything goes
+# -----------------------------------------------------------------------------
+
+# Parent directory holding every cloned repo. Created if missing.
+matter_root: "{{ ansible_env.HOME }}/matter"
+
+# The SDK checkout. Derived from matter_root and the connectedhomeip entry in
+# matter_repos below; override only if you keep the SDK somewhere unusual.
+matter_sdk_dir: "{{ matter_root }}/connectedhomeip"
+
+# Where role-installed binaries are linked (alchemy, zap). Must be on your PATH
+# for the tools to be callable by name. Set to "" to skip linking entirely.
+matter_bin_dir: "{{ ansible_env.HOME }}/.local/bin"
+
+# -----------------------------------------------------------------------------
+# Who are you? This is the single most important setting.
+#
+# There are two supported audiences, and the difference is only which
+# repositories you can access.
+#
+#   false (default) - NOT a CSA member, or not doing spec work.
+#     You get everything needed to build the SDK, run example apps, write
+#     Matter integrations and products, and develop against public APIs. This
+#     is the large majority of Matter developers. All repositories used are
+#     public, so no GitHub credentials are required at all.
+#
+#   true - a CSA (Connectivity Standards Alliance) participating member doing
+#     development ON the standard itself: authoring specification text, adding
+#     clusters or device types, writing certification test plans.
+#     This additionally clones the members-only repositories, which require
+#     both CSA membership and your SSH key registered with github.com.
+#     Preflight verifies that access up front rather than letting a clone fail
+#     halfway through the run.
+#
+# Setting this to true is not a way to GET access. It reflects access you
+# already have. If you set it without membership, preflight tells you plainly
+# instead of failing with an opaque git error.
+matter_csa_member: false
+
+# -----------------------------------------------------------------------------
+# Repositories
+#
+# Each entry: name (directory under matter_root), url, version (branch/tag/SHA),
+# enabled (clone it at all), and optionally private: true, which marks the repo
+# as members-only. Private repos are cloned when matter_csa_member is true, or
+# when named individually in matter_repos_enable below.
+#
+# Set enabled: false for anything you do not need. Adding your own repo is just
+# another list entry.
+# -----------------------------------------------------------------------------
+
+matter_repos:
+  # The SDK itself. Everything else is optional.
+  - name: connectedhomeip
+    url: https://github.com/project-chip/connectedhomeip.git
+    version: master
+    enabled: true
+
+  # Spec-to-SDK artifact generator (ZAP XMLs, data model XMLs, test-plan and
+  # test-script skeletons). Go program; see alchemy_* below.
+  - name: alchemy
+    url: https://github.com/project-chip/alchemy.git
+    version: main
+    enabled: true
+
+  # ZAP (ZCL Advanced Platform) source. Only needed if you want to run the ZAP
+  # GUI from source; the SDK's pigweed environment already provides zap-cli,
+  # which is what the SDK's own codegen scripts actually call.
+  - name: zap
+    url: https://github.com/project-chip/zap.git
+    version: master
+    enabled: false
+
+  # Rendered SDK documentation (the gh-pages branch carries built HTML plus the
+  # _sources/ Markdown, which greps far better than the website).
+  - name: connectedhomeip-doc
+    url: https://github.com/project-chip/connectedhomeip-doc.git
+    version: gh-pages
+    enabled: false
+
+  # ---- CSA-members-only repos --------------------------------------------
+  # These are cloned only when matter_csa_member is true (or when named in
+  # matter_repos_enable). They are SSH URLs because they are private: HTTPS
+  # would prompt for credentials rather than failing cleanly.
+
+  # The Matter specification source (adoc + XML). Needed to author spec changes
+  # or to run alchemy against spec sources.
+  - name: connectedhomeip-spec
+    url: git@github.com:CHIP-Specifications/connectedhomeip-spec.git
+    version: master
+    enabled: false
+    private: true
+
+  # Certification test plans (.adoc). Needed for test-plan authoring.
+  - name: chip-test-plans
+    url: git@github.com:CHIP-Specifications/chip-test-plans.git
+    version: master
+    enabled: false
+    private: true
+
+# Turning individual repos on and off WITHOUT copying the whole list above.
+#
+# YAML lists do not merge: if you redefined matter_repos in host_vars just to
+# flip one "enabled", you would have to paste the entire list and then keep it
+# in sync with upstream forever. These three knobs exist so you never have to.
+#
+#   matter_repos_enable  : names to clone regardless of their enabled: flag
+#   matter_repos_disable : names to skip regardless of their enabled: flag
+#   matter_repos_extra   : whole repo entries of your own, same shape as above
+#
+# So a CSA member's entire personal config can be:
+#   matter_repos_enable: [connectedhomeip-spec, chip-test-plans]
+#
+# Disable wins over enable if a name appears in both, so the safe outcome (do
+# not touch it) is the one that survives a config mistake.
+matter_repos_enable: []
+matter_repos_disable: []
+matter_repos_extra: []
+
+# How existing clones are maintained on re-runs. This tool NEVER discards your
+# work: it will not hard-reset, force-checkout, or clean a tree.
+#
+# Note that a repo's `version:` above applies when the repo is CLONED. On an
+# existing clone the role fast-forwards whatever branch you are on and never
+# switches branches, because switching would disrupt work in progress. To move
+# an existing clone to a different branch, check it out yourself.
+#   ff-only    : fetch, then fast-forward the current branch if the tree is
+#                clean and the branch has an upstream. Anything dirty or
+#                diverged is left untouched and reported at the end.
+#   fetch-only : fetch and report, never move the working tree.
+#   none       : leave existing clones completely alone.
+matter_repos_update: ff-only
+
+# -----------------------------------------------------------------------------
+# SDK submodules and pigweed environment
+# -----------------------------------------------------------------------------
+
+# Which platform's submodules to check out. The SDK has ~78 submodules and you
+# almost never want all of them; this is passed to
+# scripts/checkout_submodules.py --platform. Valid values include: linux,
+# darwin, android, esp32, silabs, nrfconnect, telink, tizen, unit_tests.
+# Defaults to the platform you are provisioning. List more than one if you
+# cross-build, e.g. ["linux", "esp32"].
+matter_submodule_platforms:
+  - "{{ 'darwin' if ansible_system == 'Darwin' else 'linux' }}"
+
+# Shallow submodule checkout. Much faster and smaller; turn off only if you need
+# full submodule history.
+matter_submodules_shallow: true
+
+# Run the SDK's pigweed bootstrap (scripts/bootstrap.sh). This downloads the
+# CIPD toolchain and builds the Python virtualenv, and is the prerequisite for
+# any build. Takes a few minutes the first time.
+matter_bootstrap: true
+
+# -----------------------------------------------------------------------------
+# Tools
+# -----------------------------------------------------------------------------
+
+# alchemy: install method is "release" (download the prebuilt binary for this
+# OS/arch and verify it against the published md5) or "source" (go build in the
+# clone, which needs Go >= 1.25 and the alchemy repo enabled above).
+matter_install_alchemy: true
+alchemy_install_method: release
+alchemy_release_version: latest
+
+# ZAP release binary (zap-cli + the GUI app). The SDK's pigweed environment
+# already supplies zap-cli, so this is only for using ZAP outside an activated
+# SDK environment. Off by default.
+matter_install_zap_release: false
+zap_release_version: latest
+
+# -----------------------------------------------------------------------------
+# Building and the smoke test (all opt-in via the "build" tag)
+#
+# These are OFF by default so a plain `ansible-playbook setup.yml` is fast and
+# just gives you a ready-to-build environment. Turn them on here, or run
+# `ansible-playbook setup.yml --tags build` which enables them for that run.
+# -----------------------------------------------------------------------------
+
+# Build an example app. The path is relative to the SDK root. Despite the
+# "linux" directory name these are host builds and compile natively on macOS.
+matter_build_example: false
+matter_example_path: examples/all-clusters-app/linux
+matter_example_out: out/example
+matter_example_binary: chip-all-clusters-app
+
+# Build the Python controller (src/python_testing harness). Required to run any
+# TC_* test, including the smoke test below.
+matter_build_python_controller: false
+matter_python_env: out/python_env
+
+# Smoke test: commission the freshly-built example app with the freshly-built
+# controller and run one real certification test against it. This is the
+# difference between "the tools installed" and "the environment actually works".
+matter_smoke_test: false
+matter_smoke_test_script: src/python_testing/TC_DeviceBasicComposition.py
+
+# Commissioning parameters for the smoke test. The manual code is the pairing
+# code matching discriminator+passcode; change all three together or not at all.
+matter_smoke_discriminator: 1234
+matter_smoke_passcode: 20202021
+matter_smoke_manual_code: "10054912339"
+matter_smoke_pics: src/app/tests/suites/certification/ci-pics-values
+
+# -----------------------------------------------------------------------------
+# Preflight
+# -----------------------------------------------------------------------------
+
+# Free space required under matter_root before we start. A full SDK checkout
+# with submodules plus one example app build runs well into tens of GB, and
+# running out mid-build wastes far more time than this check costs.
+matter_min_free_gb: 40
+
+# Minimum Python the SDK requires on the host (the pigweed environment brings
+# its own interpreter for builds, but the SDK's own scripts need this).
+matter_min_python: "3.11"
+
+# Treat preflight problems as fatal. Set false to report and continue anyway,
+# which is occasionally useful on an unusual host you know is fine.
+matter_preflight_strict: true
+
+# Install OS packages (apt on Debian/Ubuntu, plus a Homebrew check on macOS).
+# Needs sudo on Linux. Set false on a host where you manage packages yourself.
+matter_install_packages: true
+
+# -----------------------------------------------------------------------------
+# Derived values. You should not normally need to change these.
+# -----------------------------------------------------------------------------
+
+# Every declared repo plus any you added.
+matter_repos_all: "{{ matter_repos + matter_repos_extra }}"
+
+# Names we want: those enabled by default, plus any you named explicitly, plus
+# every members-only repo if you are a CSA member.
+matter_repos_wanted: >-
+  {{ (matter_repos_all | selectattr('enabled', 'defined') | selectattr('enabled')
+      | map(attribute='name') | list)
+     + matter_repos_enable
+     + ((matter_repos_all | selectattr('private', 'defined') | selectattr('private')
+         | map(attribute='name') | list) if matter_csa_member | bool else []) }}
+
+# The repository list actually acted on. This is what every role consumes;
+# nothing reads matter_repos directly. Disable is applied last, so it wins.
+matter_repos_effective: >-
+  {{ matter_repos_all
+     | rejectattr('name', 'in', matter_repos_disable)
+     | selectattr('name', 'in', matter_repos_wanted)
+     | list }}
+
+# True when connectedhomeip is one of the effective repos. The toolchain role
+# skips submodules and bootstrap entirely when the SDK is not being managed.
+matter_sdk_enabled: >-
+  {{ matter_repos_effective
+     | selectattr('name', 'equalto', 'connectedhomeip') | list | length > 0 }}
+
+# True when this run was invoked with --tags build, which turns the optional
+# build steps on for that run without editing any of the flags above.
+matter_build_requested: "{{ 'build' in (ansible_run_tags | default([])) }}"

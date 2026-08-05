@@ -1,0 +1,80 @@
+---
+# Get the SDK checkout to the point where it can actually build:
+# submodules for the platforms you care about, then pigweed's bootstrap.
+
+- name: Check out submodules for {{ matter_submodule_platforms | join(', ') }}
+  ansible.builtin.command:
+    cmd: >-
+      python3 scripts/checkout_submodules.py
+      {{ '--shallow' if matter_submodules_shallow | bool else '' }}
+      --platform {{ matter_submodule_platforms | join(' ') }}
+    chdir: "{{ matter_sdk_dir }}"
+  register: toolchain_submodules
+  changed_when: "'Checking out' in toolchain_submodules.stdout"
+
+# checkout_submodules.py registers submodules, but a clone that was previously
+# checked out for a different platform set can be left with registered-but-empty
+# working trees. pigweed's own repo is the one that matters: bootstrap cannot
+# run without it, and the failure it produces otherwise is opaque.
+- name: Verify the pigweed submodule is populated
+  ansible.builtin.stat:
+    path: "{{ matter_sdk_dir }}/third_party/pigweed/repo/pw_env_setup"
+  register: toolchain_pigweed_populated
+
+# ansible.builtin.git cannot drive `submodule update` for an already-registered
+# submodule, so the command is the correct tool here. Note the deliberate
+# absence of --force: populating an empty submodule must not be able to discard
+# changes in a populated one.
+- name: Populate submodules that were registered but left empty # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: git submodule update --init --recursive third_party/pigweed/repo
+    chdir: "{{ matter_sdk_dir }}"
+  when: not toolchain_pigweed_populated.stat.exists
+  changed_when: true
+
+- name: Re-verify the pigweed submodule
+  ansible.builtin.stat:
+    path: "{{ matter_sdk_dir }}/third_party/pigweed/repo/pw_env_setup"
+  register: toolchain_pigweed_recheck
+  when: not toolchain_pigweed_populated.stat.exists
+
+- name: Fail clearly if pigweed is still missing
+  ansible.builtin.assert:
+    that: toolchain_pigweed_recheck.stat.exists
+    fail_msg: >-
+      third_party/pigweed/repo is still empty after a submodule update, so
+      bootstrap cannot run. Check for a partially-initialised submodule:
+      `git -C {{ matter_sdk_dir }} submodule status third_party/pigweed/repo`
+    quiet: true
+  when: not toolchain_pigweed_populated.stat.exists
+
+# Bootstrap downloads the CIPD toolchain and builds the Python virtualenv. It is
+# the step that fails on macOS when the keychain holds an unparseable
+# certificate, which is exactly what the preflight role checks for. If this
+# fails with "ssl.SSLError: [PEM] ASN1 lib", run:
+#   matter-check-keychain-certs
+- name: Bootstrap the pigweed environment, several minutes on first run
+  ansible.builtin.shell:
+    cmd: source scripts/bootstrap.sh
+    chdir: "{{ matter_sdk_dir }}"
+    creates: "{{ matter_sdk_dir }}/.environment"
+  args:
+    executable: /bin/bash
+  register: toolchain_bootstrap
+  async: 3600
+  poll: 15
+  when: matter_bootstrap | bool
+
+- name: Confirm the pigweed environment exists
+  ansible.builtin.stat:
+    path: "{{ matter_sdk_dir }}/.environment"
+  register: toolchain_pigweed_env
+
+- name: Report the SDK environment status
+  ansible.builtin.debug:
+    msg: >-
+      SDK at {{ matter_sdk_dir }};
+      pigweed environment
+      {{ 'ready' if toolchain_pigweed_env.stat.exists else 'NOT bootstrapped' }}.
+      Activate it in a shell with:
+      cd {{ matter_sdk_dir }} && source scripts/activate.sh

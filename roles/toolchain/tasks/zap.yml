@@ -1,0 +1,53 @@
+---
+# ZAP (ZCL Advanced Platform) release install.
+#
+# You usually do NOT need this. The SDK's pigweed environment already provides
+# zap-cli, and zap-cli is what the SDK's own codegen (scripts/tools/zap/*) calls.
+# Install this only if you want the ZAP GUI, or zap-cli outside an activated SDK
+# environment. Hence matter_install_zap_release defaults to false.
+
+- name: Resolve the ZAP release tag
+  ansible.builtin.uri:
+    url: >-
+      https://api.github.com/repos/project-chip/zap/releases/{{
+        'latest' if zap_release_version == 'latest'
+        else 'tags/' ~ zap_release_version }}
+    return_content: true
+  register: toolchain_zap_release
+
+- name: Install the ZAP release
+  vars:
+    # Assets are named zap-<os>-<arch>.zip, with ZAP's own spellings: "mac"
+    # rather than darwin, and "x64" rather than amd64.
+    zap_os: "{{ 'mac' if ansible_system == 'Darwin' else 'linux' }}"
+    zap_arch: "{{ 'arm64' if ansible_architecture in ['arm64', 'aarch64'] else 'x64' }}"
+    zap_asset: "zap-{{ zap_os }}-{{ zap_arch }}.zip"
+    zap_dir: "{{ matter_root }}/.zap-install/{{ toolchain_zap_release.json.tag_name }}"
+  block:
+
+    - name: Create the ZAP install directory
+      ansible.builtin.file:
+        path: "{{ zap_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Download and unpack ZAP
+      ansible.builtin.unarchive:
+        src: "https://github.com/project-chip/zap/releases/download/{{ toolchain_zap_release.json.tag_name }}/{{ zap_asset }}"
+        dest: "{{ zap_dir }}"
+        remote_src: true
+        creates: "{{ zap_dir }}/zap-cli"
+
+    - name: Link zap-cli onto PATH
+      ansible.builtin.file:
+        src: "{{ zap_dir }}/zap-cli"
+        dest: "{{ matter_bin_dir }}/zap-cli"
+        state: link
+        force: true
+      when: matter_bin_dir | length > 0
+
+    - name: Report the ZAP install
+      ansible.builtin.debug:
+        msg: >-
+          ZAP {{ toolchain_zap_release.json.tag_name }} installed at {{ zap_dir }};
+          zap-cli linked into {{ matter_bin_dir }}.

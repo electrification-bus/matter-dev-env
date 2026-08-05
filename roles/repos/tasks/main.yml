@@ -1,0 +1,41 @@
+---
+# Clone and maintain the configured repositories.
+#
+# Safety contract, which is the whole point of this role:
+#   This NEVER discards your work. No hard reset, no force checkout, no clean,
+#   no force push of any kind. A repo with local modifications, or on a branch
+#   that has diverged from its upstream, is left exactly as it is and reported
+#   at the end. Updating is strictly fast-forward.
+#
+# That is what makes it safe to run on a schedule, or every morning, against a
+# tree you are actively working in.
+
+- name: Ensure the parent directory for all repositories exists
+  ansible.builtin.file:
+    path: "{{ matter_root }}"
+    state: directory
+    mode: "0755"
+
+- name: Start with an empty repository report
+  ansible.builtin.set_fact:
+    repos_report: []
+
+- name: Clone or update each enabled repository
+  ansible.builtin.include_tasks: one_repo.yml
+  loop: "{{ matter_repos_effective }}"
+  loop_control:
+    loop_var: repo
+    label: "{{ repo.name }}"
+
+- name: Repository summary
+  ansible.builtin.debug:
+    msg: "{{ repos_report }}"
+
+- name: Warn about repositories left untouched
+  ansible.builtin.debug:
+    msg: >-
+      {{ repos_report | select('search', 'SKIPPED') | list | length }}
+      repository(ies) were left untouched because they have local changes or
+      have diverged from upstream. That is intentional: nothing was discarded.
+      Resolve them by hand, then re-run.
+  when: repos_report | select('search', 'SKIPPED') | list | length > 0

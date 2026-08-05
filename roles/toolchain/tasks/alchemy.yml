@@ -1,0 +1,134 @@
+---
+# alchemy: generates SDK artifacts (ZAP-template XMLs, data-model XMLs,
+# test-plan and test-script skeletons) from the Matter specification sources.
+#
+# Two install methods:
+#   release (default) : download the prebuilt binary for this OS/arch and verify
+#                       it against the published md5. No Go toolchain needed.
+#   source            : go build in the alchemy clone. Needs Go >= 1.25 and the
+#                       alchemy repo enabled in matter_repos.
+
+- name: Resolve the alchemy release tag
+  ansible.builtin.uri:
+    url: >-
+      https://api.github.com/repos/project-chip/alchemy/releases/{{
+        'latest' if alchemy_release_version == 'latest'
+        else 'tags/' ~ alchemy_release_version }}
+    return_content: true
+  register: toolchain_alchemy_release
+  when: alchemy_install_method == 'release'
+
+- name: Install alchemy from a release binary
+  when: alchemy_install_method == 'release'
+  vars:
+    # Assets are named alchemy-<version>-<os>-<arch>.tar.gz, where version has
+    # no leading "v" even though the tag does.
+    alchemy_ver: "{{ toolchain_alchemy_release.json.tag_name | regex_replace('^v', '') }}"
+    alchemy_os: "{{ 'darwin' if ansible_system == 'Darwin' else 'linux' }}"
+    alchemy_arch: "{{ 'arm64' if ansible_architecture in ['arm64', 'aarch64'] else 'amd64' }}"
+    alchemy_asset: "alchemy-{{ alchemy_ver }}-{{ alchemy_os }}-{{ alchemy_arch }}.tar.gz"
+    alchemy_url: >-
+      https://github.com/project-chip/alchemy/releases/download/{{
+        toolchain_alchemy_release.json.tag_name }}/{{ alchemy_asset }}
+  block:
+
+    - name: Create a staging directory for the alchemy download
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: alchemy
+      register: toolchain_alchemy_tmp
+      changed_when: false
+
+    - name: Download the alchemy release and its md5
+      ansible.builtin.get_url:
+        url: "{{ item }}"
+        dest: "{{ toolchain_alchemy_tmp.path }}/"
+        mode: "0644"
+      loop:
+        - "{{ alchemy_url }}"
+        - "{{ alchemy_url }}.md5"
+
+    - name: Verify the download against the published md5
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          expected=$(awk '{print $1}' "{{ alchemy_asset }}.md5")
+          if command -v md5sum >/dev/null 2>&1; then
+            actual=$(md5sum "{{ alchemy_asset }}" | awk '{print $1}')
+          else
+            actual=$(md5 -q "{{ alchemy_asset }}")
+          fi
+          if [ "$expected" != "$actual" ]; then
+            echo "md5 mismatch: expected $expected, got $actual" >&2
+            exit 1
+          fi
+        chdir: "{{ toolchain_alchemy_tmp.path }}"
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Unpack alchemy
+      ansible.builtin.unarchive:
+        src: "{{ toolchain_alchemy_tmp.path }}/{{ alchemy_asset }}"
+        dest: "{{ toolchain_alchemy_tmp.path }}"
+        remote_src: true
+
+    - name: Install the alchemy binary
+      ansible.builtin.copy:
+        src: "{{ toolchain_alchemy_tmp.path }}/alchemy"
+        dest: "{{ matter_bin_dir }}/alchemy"
+        mode: "0755"
+        remote_src: true
+
+    - name: Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ toolchain_alchemy_tmp.path }}"
+        state: absent
+      changed_when: false
+
+- name: Build alchemy from source
+  when: alchemy_install_method == 'source'
+  block:
+
+    - name: Check the Go toolchain
+      ansible.builtin.command: go version
+      register: toolchain_go
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with guidance if Go is unusable
+      ansible.builtin.assert:
+        that: toolchain_go.rc == 0
+        fail_msg: >-
+          alchemy_install_method is "source" but Go is not on PATH. Either
+          install Go >= 1.25 (https://go.dev/dl/, or `brew install go` on macOS)
+          or switch to the prebuilt binary with
+          -e alchemy_install_method=release
+        quiet: true
+
+    - name: Build the alchemy binary
+      ansible.builtin.command:
+        cmd: go build -o alchemy ./cmd/alchemy
+        chdir: "{{ matter_root }}/alchemy"
+        creates: "{{ matter_root }}/alchemy/alchemy"
+
+    - name: Link the alchemy binary onto PATH
+      ansible.builtin.file:
+        src: "{{ matter_root }}/alchemy/alchemy"
+        dest: "{{ matter_bin_dir }}/alchemy"
+        state: link
+        force: true
+      when: matter_bin_dir | length > 0
+
+- name: Read back the installed alchemy version
+  ansible.builtin.command: "{{ matter_bin_dir }}/alchemy --version"
+  register: toolchain_alchemy_installed
+  changed_when: false
+  failed_when: false
+
+- name: Report the installed alchemy version
+  ansible.builtin.debug:
+    msg: >-
+      alchemy:
+      {{ toolchain_alchemy_installed.stdout | default('(version check failed)') | trim }}
+      at {{ matter_bin_dir }}/alchemy
